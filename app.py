@@ -49,6 +49,7 @@ BAD_GENERIC_PHRASES = [
     "親切丁寧", "地域密着", "お気軽にご相談", "迅速丁寧", "安心サポート", "お客様第一"
 ]
 
+
 @dataclass
 class PageData:
     url: str
@@ -130,7 +131,6 @@ def has_contact_link_or_mail(html: str, text: str) -> bool:
 
 
 def has_real_form(html: str) -> bool:
-    # 「お問い合わせ」という文字だけではフォームありと判定しない。実際のformタグを重視。
     return "<form" in html.lower()
 
 
@@ -146,7 +146,6 @@ def page_flags(pages: List[PageData]) -> Dict[str, bool]:
     all_urls = " ".join(p.url for p in pages) + " " + " ".join(href for p in pages for _, href in p.links)
     joined = all_text + " " + all_links + " " + all_headings + " " + all_urls
 
-    # 電話番号などの数字で「料金あり」と誤判定しないよう、円・万円・税込などの近接表現のみを見る。
     money_pattern = r"([0-9０-９][0-9０-９,，]*(?:\s)*(?:円|万円)|¥\s*[0-9０-９,，]+|￥\s*[0-9０-９,，]+|税込|税別)"
     has_money = bool(re.search(money_pattern, joined))
     form_tag = has_real_form(all_html)
@@ -154,8 +153,6 @@ def page_flags(pages: List[PageData]) -> Dict[str, bool]:
     table_count = all_html.lower().count("<table")
     text_len = len(all_text)
 
-    # FAQ・相談の流れは「存在確認」と「十分な説明量」を分ける。
-    # お客様向けレポートで、既にある項目を「追加する」と誤表示しないため。
     flow_terms = KEYWORDS["flow"] + ["初回相談", "ご依頼", "面談", "ヒアリング", "必要書類", "完了まで", "申告まで"]
     faq_terms = KEYWORDS["faq"] + ["よくいただく質問", "よく頂く質問", "ご質問", "質問と回答"]
     flow_exists = count_hits(joined, flow_terms) >= 1 or bool(re.search(r"/(flow|step|guide|nagare|procedure|process)(/|$|-|_)", all_urls, re.I))
@@ -164,7 +161,6 @@ def page_flags(pages: List[PageData]) -> Dict[str, bool]:
     faq_detail = count_hits(joined, faq_terms) >= 3
 
     return {
-        # 単語の有無ではなく、営業資料で根拠にできる水準まで要求する。
         "has_price": count_hits(joined, KEYWORDS["price"]) >= 2 and has_money,
         "has_case": count_hits(joined, KEYWORDS["case"]) >= 4,
         "has_flow": flow_exists,
@@ -194,21 +190,17 @@ def exact_or_partial_hit(needle: str, haystack: str) -> bool:
     needle = needle.strip()
     if not needle:
         return False
-    # 入力された業務・地域を重視。完全一致のほか、スペース区切り語の一部一致も見る。
     if needle in haystack:
         return True
     parts = [x for x in re.split(r"[\s　・,/、]+", needle) if len(x) >= 2]
     return any(x in haystack for x in parts)
 
 
-
 def apply_strictness_to_scores(scores: Dict[str, int], strictness: str) -> Dict[str, int]:
-    """URLだけの簡易診断で点数が甘く出すぎる問題を抑えるための補正。"""
     if strictness in ["簡易診断", "標準"]:
         return scores
     if strictness in ["通常診断", "辛口"]:
         return {k: cap(round(v * 0.88), 88) for k, v in scores.items()}
-    # 詳細診断：単語検出だけで高得点にしない。かなり厳しめ。
     return {k: cap(round(v * 0.76), 82) for k, v in scores.items()}
 
 
@@ -217,8 +209,8 @@ def strictness_total_cap(strictness: str) -> int:
         return 100
     if strictness in ["通常診断", "辛口"]:
         return 84
-    # URLだけでは実CVR・流入・広告成果・スマホ実表示までは見られないため、詳細診断は上限を設ける。
     return 76
+
 
 def score_site(pages: List[PageData], industry: str, area: str, service: str, strictness: str = "詳細診断") -> Dict:
     home = pages[0]
@@ -226,8 +218,6 @@ def score_site(pages: List[PageData], industry: str, area: str, service: str, st
     all_text = " ".join(p.text for p in pages)
     fv_text = " ".join([home.title, home.description] + home.h1[:2] + home.h2[:4])
 
-    # 以前は「市」「区」などがあるだけで地域評価が入り、採点が甘くなっていたため、
-    # 入力された対応エリアの一致を最優先にする。
     area_hit = exact_or_partial_hit(area, all_text) if area else False
     service_hit = exact_or_partial_hit(service, all_text) if service else False
     industry_hit = bool(industry and industry != "その他" and industry in all_text)
@@ -355,7 +345,6 @@ def score_site(pages: List[PageData], industry: str, area: str, service: str, st
     )
     scores["技術・基本品質"] = cap(tech, 100)
 
-    # 画像バナー依存・古いtableレイアウトが強い場合は、URLテキスト上では情報があっても詳細診断では厳しく見る。
     if flags.get("is_image_heavy"):
         scores["ファーストビュー"] = min(scores["ファーストビュー"], 72)
         scores["問い合わせ力"] = min(scores["問い合わせ力"], 72)
@@ -377,7 +366,6 @@ def score_site(pages: List[PageData], industry: str, area: str, service: str, st
     }
     total = sum(scores[k] * weights[k] for k in scores)
 
-    # 重要項目の欠落は総合点にも反映。重要項目が不足しているのに「何となく60点台」にならないようにする。
     penalties = []
     if not service_hit:
         penalties.append(("狙いたい業務の訴求が弱い", 8))
@@ -415,6 +403,7 @@ def score_site(pages: List[PageData], industry: str, area: str, service: str, st
         "penalties": penalties,
         "meta": {"url": home.url, "title": home.title, "description": home.description, "h1": home.h1, "pages": [p.url for p in pages], "strictness": strictness},
     }
+
 
 def analyze_url(url: str, industry: str, area: str, service: str, max_pages: int, strictness: str = "詳細診断") -> Tuple[Dict, List[PageData], Optional[str]]:
     try:
@@ -622,28 +611,193 @@ def generate_pdf_report(target_result: Dict, comments: Dict, comparison: Optiona
     return buffer.getvalue()
 
 
-st.set_page_config(page_title="HP分析ツール MVP", layout="wide")
-st.title("HP分析ツール MVP")
-st.caption("URLを入力すると、HPが問い合わせにつながる状態かを診断します。お客様に提示しやすいよう、初期設定は詳細診断です。競合URL比較とPDFレポート出力に対応。")
+# ---------- UI helpers ----------
+def inject_custom_css():
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            max-width: 900px;
+            padding-top: 1.1rem;
+            padding-bottom: 4rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        .hero-card, .section-card, .score-card {
+            border: 1px solid rgba(30, 41, 59, 0.10);
+            background: #ffffff;
+            border-radius: 18px;
+            padding: 1rem 1rem;
+            box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05);
+        }
+        .hero-title {
+            font-size: 1.7rem;
+            font-weight: 700;
+            line-height: 1.35;
+            margin-bottom: 0.4rem;
+        }
+        .hero-sub {
+            font-size: 0.95rem;
+            color: #475569;
+            line-height: 1.7;
+        }
+        .mini-note {
+            font-size: 0.84rem;
+            color: #64748b;
+            margin-top: 0.3rem;
+        }
+        .score-label {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-bottom: 0.35rem;
+        }
+        .score-value {
+            font-size: 1.35rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+        .badge-rank {
+            display: inline-block;
+            padding: 0.3rem 0.7rem;
+            border-radius: 999px;
+            background: #E0F2FE;
+            color: #075985;
+            font-size: 0.88rem;
+            font-weight: 700;
+            margin-right: 0.4rem;
+        }
+        .sticky-download {
+            position: sticky;
+            top: 0.5rem;
+            z-index: 10;
+        }
+        .compact-list ul {
+            padding-left: 1.1rem;
+            margin-top: 0.4rem;
+        }
+        .compact-list li {
+            margin-bottom: 0.45rem;
+            line-height: 1.65;
+        }
+        div[data-testid="stForm"] {
+            border: 1px solid rgba(30, 41, 59, 0.10);
+            background: #fff;
+            border-radius: 18px;
+            padding: 0.8rem 0.8rem 0.6rem 0.8rem;
+            box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05);
+        }
+        div[data-testid="stMetric"] {
+            background: #fff;
+            border: 1px solid rgba(30, 41, 59, 0.10);
+            border-radius: 16px;
+            padding: 0.6rem 0.8rem;
+        }
+        @media (max-width: 640px) {
+            .block-container {
+                padding-left: 0.75rem;
+                padding-right: 0.75rem;
+                padding-top: 0.8rem;
+            }
+            .hero-title {
+                font-size: 1.4rem;
+            }
+            .hero-sub {
+                font-size: 0.9rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-with st.sidebar:
-    st.header("分析条件")
+
+def render_intro():
+    st.markdown(
+        """
+        <div class="hero-card">
+            <div class="hero-title">HP分析ツール</div>
+            <div class="hero-sub">
+                URLを入力するだけで、問い合わせにつながるHPかを診断します。<br>
+                スマホでも使いやすいように、入力フォームと結果表示を縦スクロール中心の画面に調整しています。
+            </div>
+            <div class="mini-note">使い方：URLを入力 → 必要なら競合URLを追加 → 診断する → PDFをダウンロード</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def score_color(value: int) -> str:
+    if value >= 75:
+        return "#16A34A"
+    if value >= 60:
+        return "#CA8A04"
+    return "#DC2626"
+
+
+def render_score_cards(scores: Dict[str, int]):
+    st.markdown("### 項目別スコア")
+    for label, value in scores.items():
+        color = score_color(value)
+        st.markdown(
+            f"""
+            <div class="score-card">
+                <div class="score-label">{label}</div>
+                <div class="score-value" style="color:{color};">{value}点</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.progress(int(value), text=f"{label}：{value}点")
+
+
+def render_bullet_section(title: str, items: List[str]):
+    html_items = "".join([f"<li>{item}</li>" for item in items])
+    st.markdown(
+        f"""
+        <div class="section-card compact-list">
+            <div class="score-label">{title}</div>
+            <ul>{html_items}</ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+st.set_page_config(page_title="HP分析ツール", layout="centered", initial_sidebar_state="collapsed")
+inject_custom_css()
+render_intro()
+st.write("")
+
+with st.form("analysis_form"):
+    st.markdown("### ① 診断条件を入力")
     url = st.text_input("HP URL", placeholder="https://example.com")
-    industry = st.selectbox("業種", ["士業", "弁護士", "司法書士", "税理士", "行政書士", "その他"])
-    area = st.text_input("対応エリア", placeholder="例：柏市")
-    service = st.text_input("狙いたい業務", placeholder="例：相続登記")
-    max_pages = st.slider("追加で取得する主要ページ数", 0, 8, 4)
-    strictness = st.selectbox("診断レベル", ["詳細診断", "通常診断", "簡易診断"], index=0)
-    st.markdown("---")
-    competitor_urls_text = st.text_area("競合URL（任意・1行に1URL）", placeholder="https://competitor1.com\nhttps://competitor2.com", height=120)
-    run = st.button("診断する", type="primary")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        industry = st.selectbox("業種", ["士業", "弁護士", "司法書士", "税理士", "行政書士", "その他"])
+        area = st.text_input("対応エリア", placeholder="例：柏市・松戸市")
+    with col_b:
+        service = st.text_input("狙いたい業務", placeholder="例：相続登記")
+        strictness = st.selectbox("診断レベル", ["詳細診断", "通常診断", "簡易診断"], index=0)
+
+    with st.expander("詳細設定・競合比較（任意）"):
+        max_pages = st.slider("追加で取得する主要ページ数", 0, 8, 4)
+        competitor_urls_text = st.text_area(
+            "競合URL（1行に1URL）",
+            placeholder="https://competitor1.com\nhttps://competitor2.com",
+            height=120,
+        )
+
+    run = st.form_submit_button("診断する", type="primary", use_container_width=True)
+
 
 if run:
     if not url:
         st.error("URLを入力してください。")
         st.stop()
 
-    with st.spinner("自社HPを取得・分析しています..."):
+    with st.spinner("HPを取得・分析しています..."):
         result, pages, error = analyze_url(url, industry, area, service, max_pages, strictness)
     if error:
         st.error(f"分析に失敗しました: {error}")
@@ -663,102 +817,96 @@ if run:
     comparison = build_comparison(result, competitor_results) if competitor_results else {"competitor_count": 0}
     comments = make_comments(result)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("総合スコア", f"{result['total']}点")
-    c2.metric("判定ランク", result["rank"])
-    c3.metric("分析ページ数", f"{len(pages)}ページ")
+    st.write("")
+    st.markdown("### ② 診断結果")
+    row1_a, row1_b = st.columns(2)
+    row2_a, row2_b = st.columns(2)
+    row1_a.metric("総合スコア", f"{result['total']}点")
+    row1_b.metric("判定ランク", result["rank"])
+    row2_a.metric("分析ページ数", f"{len(pages)}ページ")
     if comparison.get("competitor_count", 0) > 0:
-        c4.metric("競合平均との差", f"{result['total'] - comparison['competitor_avg_total']:.1f}点")
+        row2_b.metric("競合平均との差", f"{result['total'] - comparison['competitor_avg_total']:.1f}点")
     else:
-        c4.metric("診断レベル", strictness)
+        row2_b.metric("診断レベル", strictness)
 
-    st.subheader("項目別スコア")
-    df = pd.DataFrame([{"評価項目": k, "スコア": v} for k, v in result["scores"].items()])
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.bar_chart(df.set_index("評価項目"))
+    st.markdown(
+        f"""
+        <div class="section-card">
+            <span class="badge-rank">{result['rank']}ランク</span>
+            <strong>{result['total']}点</strong><br>
+            <div class="mini-note">分析URL：{result['meta']['url']}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.subheader("総評")
-    st.info(sales_summary(result, comparison))
+    tab1, tab2, tab3, tab4 = st.tabs(["サマリー", "改善ポイント", "競合比較", "基本情報"])
 
-    if result.get("penalties"):
-        with st.expander("重要減点項目"):
-            penalty_df = pd.DataFrame([{"減点理由": r, "減点": f"-{p}点"} for r, p in result["penalties"]])
-            st.dataframe(penalty_df, use_container_width=True, hide_index=True)
+    with tab1:
+        st.markdown("### 総評")
+        st.info(sales_summary(result, comparison))
+        if REPORTLAB_AVAILABLE:
+            try:
+                pdf_bytes = generate_pdf_report(result, comments, comparison, industry, area, service)
+                st.download_button(
+                    "PDFレポートをダウンロード",
+                    data=pdf_bytes,
+                    file_name="hp_analysis_report.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"PDF生成に失敗しました: {e}")
+        render_score_cards(result["scores"])
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown("### 良い点")
-        for x in comments["good"]:
-            st.write("- " + x)
-    with col2:
-        st.markdown("### 課題")
-        for x in comments["issues"]:
-            st.write("- " + x)
-    with col3:
-        st.markdown("### 優先改善案")
-        for x in comments["actions"]:
-            st.write("- " + x)
+    with tab2:
+        if result.get("penalties"):
+            with st.expander("重要減点項目を確認する"):
+                penalty_df = pd.DataFrame([{"減点理由": r, "減点": f"-{p}点"} for r, p in result["penalties"]])
+                st.dataframe(penalty_df, use_container_width=True, hide_index=True)
+        render_bullet_section("良い点", comments["good"])
+        st.write("")
+        render_bullet_section("課題", comments["issues"])
+        st.write("")
+        render_bullet_section("優先改善案", comments["actions"])
 
-    if comparison.get("competitor_count", 0) > 0:
-        st.subheader("競合URL比較")
-        st.write(f"競合{comparison['competitor_count']}サイトの平均スコア：**{comparison['competitor_avg_total']}点**")
-        comp_df = pd.DataFrame(comparison["rows"])
-        st.dataframe(comp_df, use_container_width=True, hide_index=True)
-        st.markdown("### 競合と比べた優先改善候補")
-        for r in comparison["weak_vs_competitors"]:
-            st.write(f"- {r['評価項目']}：競合平均より{abs(r['差分'])}点低い（判定：{r['判定']}）")
-        st.markdown("### 競合別スコア")
-        st.dataframe(pd.DataFrame(comparison["competitor_totals"]), use_container_width=True, hide_index=True)
+    with tab3:
+        if comparison.get("competitor_count", 0) > 0:
+            st.markdown(f"**競合{comparison['competitor_count']}サイトの平均スコア：{comparison['competitor_avg_total']}点**")
+            comp_df = pd.DataFrame(comparison["rows"])
+            st.dataframe(comp_df, use_container_width=True, hide_index=True)
+            st.markdown("### 競合と比べた優先改善候補")
+            for r in comparison["weak_vs_competitors"]:
+                st.write(f"- {r['評価項目']}：競合平均より{abs(r['差分'])}点低い（判定：{r['判定']}）")
+            st.markdown("### 競合別スコア")
+            st.dataframe(pd.DataFrame(comparison["competitor_totals"]), use_container_width=True, hide_index=True)
+            if competitor_errors:
+                with st.expander("取得できなかった競合URL"):
+                    st.dataframe(pd.DataFrame(competitor_errors), use_container_width=True, hide_index=True)
+        else:
+            st.info("競合URLを入力すると、ここに比較結果が表示されます。")
 
-    if competitor_errors:
-        with st.expander("取得できなかった競合URL"):
-            st.dataframe(pd.DataFrame(competitor_errors), use_container_width=True, hide_index=True)
-
-    st.subheader("PDFレポート出力")
-    if REPORTLAB_AVAILABLE:
-        try:
-            pdf_bytes = generate_pdf_report(result, comments, comparison, industry, area, service)
-            st.download_button(
-                "PDFレポートをダウンロード",
-                data=pdf_bytes,
-                file_name="hp_analysis_report.pdf",
-                mime="application/pdf",
-            )
-        except Exception as e:
-            st.error(f"PDF生成に失敗しました: {e}")
-    else:
-        st.warning("PDF出力にはreportlabが必要です。requirements.txtからインストールしてください。")
-
-    st.subheader("取得できた基本情報")
-    st.write("**title:**", result["meta"]["title"])
-    st.write("**description:**", result["meta"]["description"])
-    st.write("**h1:**", ", ".join(result["meta"]["h1"]) if result["meta"]["h1"] else "なし")
-    st.write("**取得ページ:**")
-    for p in result["meta"]["pages"]:
-        st.write("- " + p)
-
-    st.caption("注意：このMVPはルールベース診断です。実アクセス数・問い合わせ数・CVR・広告成果は外部連携が必要です。")
+    with tab4:
+        meta_df = pd.DataFrame([
+            {"項目": "title", "内容": result["meta"]["title"] or "なし"},
+            {"項目": "description", "内容": result["meta"]["description"] or "なし"},
+            {"項目": "h1", "内容": ", ".join(result["meta"]["h1"]) if result["meta"]["h1"] else "なし"},
+            {"項目": "取得ページ数", "内容": str(len(result["meta"]["pages"]))},
+        ])
+        st.dataframe(meta_df, use_container_width=True, hide_index=True)
+        st.markdown("### 取得ページ")
+        for p in result["meta"]["pages"]:
+            st.write("- " + p)
+        st.caption("注意：この診断はURL取得情報に基づくルールベース診断です。実アクセス数・問い合わせ数・CVR・広告成果は外部連携が必要です。")
 
 else:
-    st.markdown("""
-### 診断できる項目
-- ファーストビュー
-- 訴求力
-- 信頼力
-- 問い合わせ力
-- 料金の分かりやすさ
-- コンテンツの充実度
-- SEO内部構造
-- 技術・基本品質
-
-### 追加済み機能
-- 競合URLとの比較
-- PDFレポート出力
-
-### 今後追加しやすい機能
-- 採点厳格化：料金・事例・プロフィール・問い合わせ導線・地域/業務訴求が弱い場合は重要減点
-- PageSpeed Insights API連携
-- Google Search Console / GA4連携
-- OpenAI APIによる文章・訴求評価の高度化
-- 士業別テンプレート診断
-""")
+    st.markdown("### 診断できる項目")
+    st.markdown("- ファーストビュー\n- 訴求力\n- 信頼力\n- 問い合わせ力\n- 料金の分かりやすさ\n- コンテンツの充実度\n- SEO内部構造\n- 技術・基本品質")
+    with st.expander("このアプリの特長"):
+        st.markdown(
+            "- スマホでも入力しやすいフォーム\n"
+            "- 競合URL比較\n"
+            "- PDFレポート出力\n"
+            "- お客様に見せやすいシンプルな結果画面"
+        )
+    st.info("まずは上のフォームにURLを入力して診断してください。")
