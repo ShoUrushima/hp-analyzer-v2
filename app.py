@@ -197,19 +197,25 @@ def exact_or_partial_hit(needle: str, haystack: str) -> bool:
 
 
 def apply_strictness_to_scores(scores: Dict[str, int], strictness: str) -> Dict[str, int]:
+    """診断レベル別の補正。
+    お客様に見せる前提で、標準診断は過度に辛口にならないよう調整。
+    """
     if strictness in ["簡易診断", "標準"]:
-        return scores
-    if strictness in ["通常診断", "辛口"]:
-        return {k: cap(round(v * 0.88), 88) for k, v in scores.items()}
-    return {k: cap(round(v * 0.76), 82) for k, v in scores.items()}
+        # まず全体像を見るためのやや甘めの診断
+        return {k: cap(round(v * 1.05), 100) for k, v in scores.items()}
+    if strictness in ["詳細診断", "通常診断"]:
+        # 初期表示。改善点は出すが、必要以上に悪く見せないバランス型
+        return {k: cap(round(v * 0.95), 92) for k, v in scores.items()}
+    # 改善提案重視：社内確認・改善優先度整理用
+    return {k: cap(round(v * 0.84), 86) for k, v in scores.items()}
 
 
 def strictness_total_cap(strictness: str) -> int:
     if strictness in ["簡易診断", "標準"]:
         return 100
-    if strictness in ["通常診断", "辛口"]:
-        return 84
-    return 76
+    if strictness in ["詳細診断", "通常診断"]:
+        return 92
+    return 86
 
 
 def score_site(pages: List[PageData], industry: str, area: str, service: str, strictness: str = "詳細診断") -> Dict:
@@ -368,29 +374,29 @@ def score_site(pages: List[PageData], industry: str, area: str, service: str, st
 
     penalties = []
     if not service_hit:
-        penalties.append(("狙いたい業務の訴求が弱い", 8))
+        penalties.append(("狙いたい業務の訴求が弱い", 4))
     if not area_hit:
-        penalties.append(("対応エリアの訴求が弱い", 6))
+        penalties.append(("対応エリアの訴求が弱い", 3))
     if not flags["has_price"]:
-        penalties.append(("料金情報が弱い", 10))
+        penalties.append(("料金情報が弱い", 5))
     if not flags["has_case"]:
-        penalties.append(("事例・実績が弱い", 8))
+        penalties.append(("事例・実績が弱い", 4))
     if not flags["has_profile"]:
-        penalties.append(("専門家プロフィールが弱い", 5))
+        penalties.append(("専門家プロフィールが弱い", 3))
     if not (flags["has_phone"] and flags["has_contact_link"]):
-        penalties.append(("問い合わせ導線が不足", 9))
+        penalties.append(("問い合わせ導線が不足", 5))
     if not flags["has_form"]:
-        penalties.append(("実フォームの確認が弱い", 5))
+        penalties.append(("実フォームの確認が弱い", 2))
     if flags.get("is_image_heavy"):
-        penalties.append(("画像バナー依存が強く、テキスト評価だけでは過大評価されやすい", 6))
+        penalties.append(("画像バナー依存が強く、テキスト評価だけでは過大評価されやすい", 3))
     if flags.get("is_table_old_layout"):
-        penalties.append(("古いHTMLレイアウトの可能性", 4))
+        penalties.append(("古いHTMLレイアウトの可能性", 2))
     if not flags["has_flow"]:
-        penalties.append(("相談の流れが未確認", 4))
+        penalties.append(("相談の流れが未確認", 2))
     elif not flags.get("has_flow_detail", False):
-        penalties.append(("相談の流れの説明量が不足", 2))
+        penalties.append(("相談の流れの説明量が不足", 1))
     if cta_count < 3:
-        penalties.append(("CTAが少ない", 4))
+        penalties.append(("CTAが少ない", 2))
 
     total = round(max(0, total - sum(p[1] for p in penalties)))
     total = min(total, strictness_total_cap(strictness))
@@ -432,8 +438,8 @@ def make_comments(result: Dict) -> Dict[str, List[str]]:
     for k, v in scores.items():
         if v >= 75:
             good.append(f"{k}は比較的整っています（{v}点）。")
-        elif v < 55:
-            issues.append(f"{k}が弱く、問い合わせ前の不安や離脱につながる可能性があります（{v}点）。")
+        elif v < 50:
+            issues.append(f"{k}に改善余地があります。問い合わせ前の不安を減らすため、情報の見せ方を整えるとより良くなります（{v}点）。")
 
     if not flags["has_price"]:
         actions.append("料金ページまたは費用目安を追加し、相談前の不安を下げる。")
@@ -459,7 +465,7 @@ def make_comments(result: Dict) -> Dict[str, List[str]]:
     if not issues:
         issues.append("大きな欠点は少ないですが、競合比較とCV計測でさらに改善余地を確認できます。")
     for reason, pts in result.get("penalties", []):
-        issues.append(f"重要減点：{reason}（-{pts}点）。")
+        issues.append(f"改善優先：{reason}（-{pts}点）。")
 
     if not actions:
         actions.append("競合上位サイトと比較し、料金・事例・CTAの見せ方をさらに強化する。")
@@ -474,10 +480,10 @@ def sales_summary(result: Dict, comparison: Optional[Dict] = None) -> str:
     weak_text = "、".join([f"{k}（{v}点）" for k, v in weak])
     penalty_text = ""
     if result.get("penalties"):
-        penalty_text = " 重要減点項目は" + "、".join([f"{r}（-{p}点）" for r, p in result["penalties"][:4]]) + "です。"
+        penalty_text = " 改善優先項目は" + "、".join([f"{r}（-{p}点）" for r, p in result["penalties"][:4]]) + "です。"
     base = (
         f"総合評価は{rank}ランク / {total}点です。現在のHPは、問い合わせ獲得を目的とした実務基準で見ると、"
-        f"特に{weak_text}に改善余地があります。"
+        f"特に{weak_text}は、さらに伸ばせるポイントです。"
         f"{penalty_text} 見込み客が相談前に感じる『費用・実績・流れ・相談しやすさ』の不安を解消することで、"
         "HPからの問い合わせ率改善が期待できます。まずはファーストビュー、料金情報、信頼材料、スマホ導線の順で改善することをおすすめします。"
     )
@@ -779,7 +785,7 @@ with st.form("analysis_form"):
         area = st.text_input("対応エリア", placeholder="例：柏市・松戸市")
     with col_b:
         service = st.text_input("狙いたい業務", placeholder="例：相続登記")
-        strictness = st.selectbox("診断レベル", ["詳細診断", "通常診断", "簡易診断"], index=0)
+        strictness = st.selectbox("診断レベル", ["詳細診断", "簡易診断", "改善提案重視"], index=0)
 
     with st.expander("詳細設定・競合比較（任意）"):
         max_pages = st.slider("追加で取得する主要ページ数", 0, 8, 4)
@@ -861,7 +867,7 @@ if run:
 
     with tab2:
         if result.get("penalties"):
-            with st.expander("重要減点項目を確認する"):
+            with st.expander("改善優先項目を確認する"):
                 penalty_df = pd.DataFrame([{"減点理由": r, "減点": f"-{p}点"} for r, p in result["penalties"]])
                 st.dataframe(penalty_df, use_container_width=True, hide_index=True)
         render_bullet_section("良い点", comments["good"])
